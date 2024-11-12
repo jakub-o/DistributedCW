@@ -8,51 +8,57 @@ import java.util.logging.Logger;
 public class FraudDetectionFunction {
 
     @FunctionName("FraudDetection")
-    public void detectFraud(
-        @TimerTrigger(name = "fraudDetectionTrigger", schedule = "*/5 * * * * *") String timerInfo,
+    public void processTransaction(
+        @QueueTrigger(name = "transactionQueue", queueName = "transactionqueue", connection = "AzureWebJobsStorage")
+        String transactionMessage,
         final ExecutionContext context) {
 
         Logger logger = context.getLogger();
-        logger.info("Fraud detection function triggered.");
+        logger.info("Processing transaction for fraud detection: " + transactionMessage);
 
-        // Database connection details
+        // Parse the transaction message
+        String[] transactionParts = transactionMessage.split(",");
+        String senderId = transactionParts[0];
+        String receiverId = transactionParts[1];
+        double amount = Double.parseDouble(transactionParts[2]);
+
+        double thresholdAmount = 10000; // Threshold for high-value transactions
         String jdbcUrl = System.getenv("SQL_CONNECTION_STRING");
         String dbUser = System.getenv("DB_USER");
         String dbPassword = System.getenv("DB_PASSWORD");
 
-        double thresholdAmount = 10000; // Threshold for high-value transactions
+        // Insert transaction and perform fraud detection
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword)) {
+            // Insert transaction into the database
+            String insertSql = "INSERT INTO transactions (sender_id, receiver_id, amount, timestamp) VALUES (?, ?, ?, GETDATE())";
+            try (PreparedStatement insertStmt = conn.prepareStatement(insertSql, Statement.RETURN_GENERATED_KEYS)) {
+                insertStmt.setString(1, senderId);
+                insertStmt.setString(2, receiverId);
+                insertStmt.setDouble(3, amount);
+                insertStmt.executeUpdate();
 
-        try (Connection conn = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
-            PreparedStatement selectStmt = conn.prepareStatement(
-                "SELECT id, amount, sender_id, receiver_id, timestamp FROM transactions " +
-                "WHERE timestamp > DATEADD(SECOND, -5, GETDATE()) AND fraud_flag = 0");
-            PreparedStatement updateStmt = conn.prepareStatement(
-                "UPDATE transactions SET fraud_flag = 1 WHERE id = ?")) {
+                logger.info("Transaction inserted successfully for sender: " + senderId + ", amount: " + amount);
+            }
 
-            ResultSet rs = selectStmt.executeQuery();
+            // Fraud detection logic
+            if (amount > thresholdAmount) {
+                logger.warning("High-value transaction detected. Sender: " + senderId +
+                        ", Receiver: " + receiverId + ", Amount: " + amount);
 
-            while (rs.next()) {
-                double amount = rs.getDouble("amount");
-                String senderId = rs.getString("sender_id");
-                String receiverId = rs.getString("receiver_id");
-                Timestamp timestamp = rs.getTimestamp("timestamp");
-                int transactionId = rs.getInt("id");
-
-                if (amount > thresholdAmount) {
-                    logger.warning("High-value transaction detected. Sender: " + senderId +
-                                ", Receiver: " + receiverId + ", Amount: " + amount +
-                                ", Timestamp: " + timestamp);
-
-                    // Mark this transaction as processed for fraud
-                    updateStmt.setInt(1, transactionId);
+                // Mark this transaction as potentially fraudulent
+                String updateSql = "UPDATE transactions SET fraud_flag = 1 WHERE sender_id = ? AND receiver_id = ? AND amount = ?";
+                try (PreparedStatement updateStmt = conn.prepareStatement(updateSql)) {
+                    updateStmt.setString(1, senderId);
+                    updateStmt.setString(2, receiverId);
+                    updateStmt.setDouble(3, amount);
                     updateStmt.executeUpdate();
-                }
 
-                logger.info("Checked transaction for fraud. Sender: " + senderId + ", Amount: " + amount);
+                    logger.info("Fraudulent transaction marked for sender: " + senderId + ", amount: " + amount);
+                }
             }
 
         } catch (SQLException e) {
-            logger.severe("Database connection error during fraud detection: " + e.getMessage());
+            logger.severe("Database error during transaction processing: " + e.getMessage());
         }
     }
 }

@@ -2,7 +2,9 @@ package com.function;
 
 import com.microsoft.azure.functions.*;
 import com.microsoft.azure.functions.annotation.*;
-import java.sql.*;
+import com.microsoft.azure.storage.*;
+import com.microsoft.azure.storage.queue.*;
+
 import java.util.Map;
 import java.util.Optional;
 
@@ -14,14 +16,13 @@ public class TransactionLoggingFunction {
         HttpRequestMessage<Optional<Map<String, Object>>> request,
         final ExecutionContext context) {
 
-        // Extract and validate transaction data
         Map<String, Object> transactionData = request.getBody().orElse(null);
         if (transactionData == null) {
             context.getLogger().severe("Invalid transaction data");
             return request.createResponseBuilder(HttpStatus.BAD_REQUEST).body("Invalid transaction data").build();
         }
 
-        // Retrieve and validate required fields
+        // Extract fields from transaction data
         String senderId = (String) transactionData.get("sender_id");
         String receiverId = (String) transactionData.get("receiver_id");
         Object amountObj = transactionData.get("amount");
@@ -39,41 +40,26 @@ public class TransactionLoggingFunction {
             return request.createResponseBuilder(HttpStatus.BAD_REQUEST).body("Invalid amount format").build();
         }
 
-        Timestamp timestamp = new Timestamp(System.currentTimeMillis());
+        // Create a queue message for transaction processing
+        try {
+            // Connect to Azure Storage Queue
+            CloudStorageAccount storageAccount = CloudStorageAccount.parse(System.getenv("AzureWebJobsStorage"));
+            CloudQueueClient queueClient = storageAccount.createCloudQueueClient();
+            CloudQueue queue = queueClient.getQueueReference("transactionqueue");
 
-        // Retrieve database connection details from environment variables
-        String jdbcUrl = System.getenv("SQL_CONNECTION_STRING");
-        String dbUser = System.getenv("DB_USER");
-        String dbPassword = System.getenv("DB_PASSWORD");
+            // Create message content
+            String messageContent = senderId + "," + receiverId + "," + amount;
+            CloudQueueMessage message = new CloudQueueMessage(messageContent);
 
-        if (jdbcUrl == null || dbUser == null || dbPassword == null) {
-            context.getLogger().severe("Database configuration missing in environment variables.");
-            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Database configuration error").build();
-        }
+            // Add message to the queue
+            queue.addMessage(message);
 
-        context.getLogger().info("Received transaction data: " + transactionData);
-        context.getLogger().info("Connecting to database with URL: " + jdbcUrl);
+            context.getLogger().info("Transaction queued for processing: " + messageContent);
+            return request.createResponseBuilder(HttpStatus.OK).body("Transaction queued successfully").build();
 
-        // Attempt to log the transaction in the database
-        try (Connection conn = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword);
-             PreparedStatement stmt = conn.prepareStatement(
-                 "INSERT INTO transactions (amount, sender_id, receiver_id, timestamp) VALUES (?, ?, ?, ?)")) {
-
-            stmt.setDouble(1, amount);
-            stmt.setString(2, senderId);
-            stmt.setString(3, receiverId);
-            stmt.setTimestamp(4, timestamp);
-            stmt.executeUpdate();
-
-            context.getLogger().info("Transaction logged: " + transactionData);
-            return request.createResponseBuilder(HttpStatus.OK).body("Transaction logged successfully").build();
-
-        } catch (SQLException e) {
-            context.getLogger().severe("Database error: " + e.getMessage());
-            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Error logging transaction").build();
         } catch (Exception e) {
-            context.getLogger().severe("Unexpected error: " + e.getMessage());
-            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Unexpected error").build();
+            context.getLogger().severe("Error queuing transaction: " + e.getMessage());
+            return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR).body("Error queuing transaction").build();
         }
     }
 }
