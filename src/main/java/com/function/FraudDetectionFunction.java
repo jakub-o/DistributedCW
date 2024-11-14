@@ -15,33 +15,42 @@ public class FraudDetectionFunction {
     private static OrtEnvironment env;
     private static OrtSession session;
 
-    // Static block to initialize the ONNX model session only once
+    // Static block to initialize the ONNX model session only once when the class is loaded
     static {
         try {
+            // Set up the ONNX runtime environment
             env = OrtEnvironment.getEnvironment();
-            // Load model from resources
+            // Load the fraud detection model from resources
             InputStream modelStream = FraudDetectionFunction.class.getClassLoader().getResourceAsStream("fraud_model.onnx");
             if (modelStream == null) {
                 throw new OrtException("Model file not found in resources.");
             }
 
-            // Copy model to temporary directory
+            // Copy the model to a temporary directory to make it accessible for the ONNX session
             String modelPath = Paths.get(System.getProperty("java.io.tmpdir"), "fraud_model.onnx").toString();
-            Files.deleteIfExists(Paths.get(modelPath));  // Clear any existing temp file
-            Files.copy(modelStream, Paths.get(modelPath));  // Save temporarily for access
+            // Delete any existing temporary model file
+            Files.deleteIfExists(Paths.get(modelPath));
+            // Copy the model file to temp
+            Files.copy(modelStream, Paths.get(modelPath));
 
-            // Create ONNX session with the loaded model
+            // Create an ONNX session with the loaded model
             OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
             session = env.createSession(modelPath, opts);
             System.out.println("ONNX model loaded and cached successfully.");
         } catch (Exception e) {
             System.err.println("Failed to load ONNX model: " + e.getMessage());
-            session = null;  // Set session to null if loading fails
+            // Set session to null if model loading fails
+            session = null;
         }
     }
 
+    /**
+     * Function to process transactions for fraud detection.
+     * It triggers on messages in an Azure Queue, logs transaction info, and checks for potential fraud.
+     */
     @FunctionName("FraudDetection")
     public void processTransaction(
+        // Queue trigger to listen to transaction messages in the queue "transactionqueue"
         @QueueTrigger(name = "transactionQueue", queueName = "transactionqueue", connection = "AzureWebJobsStorage")
         String transactionMessage,
         final ExecutionContext context) {
@@ -55,47 +64,48 @@ public class FraudDetectionFunction {
             return;
         }
 
-        // Split message and directly assign known float data
+        // Split the message to extract transaction details (sender, receiver, amount)
         String[] transactionParts = transactionMessage.split(",");
         double amount = Double.parseDouble(transactionParts[2]);
 
+        // Set up database connection parameters from environment variables
         String jdbcUrl = System.getenv("SQL_CONNECTION_STRING");
         String dbUser = System.getenv("DB_USER");
         String dbPassword = System.getenv("DB_PASSWORD");
 
         try (Connection conn = DriverManager.getConnection(jdbcUrl, dbUser, dbPassword)) {
-            // Insert transaction into the database
+            // Insert transaction details into the database
             String insertSql = "INSERT INTO transactions (sender_id, receiver_id, amount, timestamp) VALUES (?, ?, ?, GETDATE())";
             try (PreparedStatement insertStmt = conn.prepareStatement(insertSql, Statement.RETURN_GENERATED_KEYS)) {
-                insertStmt.setString(1, transactionParts[0]);  // senderId
-                insertStmt.setString(2, transactionParts[1]);  // receiverId
+                insertStmt.setString(1, transactionParts[0]);
+                insertStmt.setString(2, transactionParts[1]);
                 insertStmt.setDouble(3, amount);
                 insertStmt.executeUpdate();
                 logger.info("Transaction inserted successfully for sender: " + transactionParts[0] + ", amount: " + amount);
             }
 
-            // Prepare input tensor with amount and timestamp directly
+            // Prepare input tensor for the fraud detection model with transaction amount and timestamp
             float[] features = {(float) amount, (float) System.currentTimeMillis()};
             OnnxTensor inputTensor = OnnxTensor.createTensor(env, new float[][]{features});
 
-            // Run prediction using cached model session
+            // Run the prediction using the ONNX model
             HashMap<String, OnnxTensor> inputs = new HashMap<>();
             inputs.put(session.getInputNames().iterator().next(), inputTensor);
             OrtSession.Result results = session.run(inputs);
 
-            // Log the class type of the output to understand its structure
+            // Retrieve (and log the model output for verification for debugging)
             Object outputObject = results.get(0).getValue();
-            logger.info("Model output type: " + outputObject.getClass().getName());
+            //logger.info("Model output type: " + outputObject.getClass().getName());
 
-            // Assuming the output is long[] with a single value, handle accordingly
+            // Assuming the model output is a long array, extract the fraud probability
             if (outputObject instanceof long[]) {
                 long[] output = (long[]) outputObject;
                 if (output.length > 0) {
-                    // Log the output value and handle fraud detection accordingly
-                    long fraudProbability = output[0];  // Adjust based on model output
+                    // Log fraud probability and check if it exceeds a threshold for flagging
+                    long fraudProbability = output[0];
                     logger.info("Fraud probability (long): " + fraudProbability);
-                    // If the fraud probability is above a threshold (e.g., 0.5), flag the transaction
-                    if (fraudProbability > 0) {  // Adjust condition based on the actual fraud threshold
+                    // If fraud probability is above a threshold, flag the transaction as suspicious
+                    if (fraudProbability > 0) {
                         logger.warning("Fraudulent transaction detected! Sender: " + transactionParts[0] + ", Amount: " + amount);
                         String updateSql = "UPDATE transactions SET fraud_flag = 1 WHERE sender_id = ? AND receiver_id = ? AND amount = ?";
                         try (PreparedStatement updateStmt = conn.prepareStatement(updateSql)) {
@@ -109,10 +119,11 @@ public class FraudDetectionFunction {
                     logger.warning("Model output is empty or does not contain valid fraud detection information.");
                 }
             } else {
+                // Handle unexpected output types if necessary
                 logger.severe("Unexpected output type: " + outputObject.getClass().getName());
-                // Handle the unexpected output type accordingly
             }
-            inputTensor.close();  // Free tensor resources after prediction
+            // Free resources allocated for the tensor
+            inputTensor.close();
 
         } catch (Exception e) {
             logger.severe("Error processing transaction: " + e.getMessage());

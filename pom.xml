@@ -1,14 +1,18 @@
 <?xml version="1.0" encoding="UTF-8" ?>
+<!-- Maven Project Object Model (POM) file for configuring build dependencies, plugins, and other project properties -->
+
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <!-- Define the model version of the POM file -->
     <modelVersion>4.0.0</modelVersion>
 
+    <!-- Define basic project metadata -->
     <groupId>com.function</groupId>
     <artifactId>DistributedCW</artifactId>
     <version>1.0-SNAPSHOT</version>
     <packaging>jar</packaging>
-
     <name>Azure Java Functions</name>
 
+    <!-- Define properties used throughout the POM -->
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <java.version>17</java.version>
@@ -17,28 +21,36 @@
         <functionAppName>DistributedCW-1731233965440</functionAppName>
     </properties>
 
+    <!-- Define project dependencies -->
     <dependencies>
+        <!-- Azure Functions Java library for creating functions -->
         <dependency>
             <groupId>com.microsoft.azure.functions</groupId>
             <artifactId>azure-functions-java-library</artifactId>
             <version>${azure.functions.java.library.version}</version>
         </dependency>
         
-        <!-- Azure Storage Queue dependency -->
+        <!-- Azure Storage Queue library for queue operations -->
         <dependency>
             <groupId>com.microsoft.azure</groupId>
             <artifactId>azure-storage</artifactId>
             <version>8.6.6</version>
+            <exclusions>
+                <!-- Exclude slf4j-api to avoid conflicts with other logging dependencies -->
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
-        <!-- Test dependencies -->
+        <!-- Test dependencies for unit testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <version>5.4.2</version>
             <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>
@@ -46,63 +58,90 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- SQL Server JDBC driver for database connectivity -->
         <dependency>
             <groupId>com.microsoft.sqlserver</groupId>
             <artifactId>mssql-jdbc</artifactId>
-            <version>12.8.1.jre8</version>
+            <version>12.8.1.jre11</version>
         </dependency>
 
+        <!-- Jackson library for JSON and XML processing -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>2.14.1</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-xml</artifactId>
+            <version>2.14.1</version>
+        </dependency>
+
+        <!-- Netty library for compatibility with the Azure SDK -->
+        <dependency>
+            <groupId>io.netty</groupId>
+            <artifactId>netty-all</artifactId>
+            <version>4.1.70.Final</version>
+        </dependency>
+
+        <!-- Azure Blob Storage SDK for blob storage operations -->
         <dependency>
             <groupId>com.azure</groupId>
             <artifactId>azure-storage-blob</artifactId>
-            <version>12.14.0</version>
+            <version>12.11.0</version>
         </dependency>
 
+        <!-- ONNX runtime library for machine learning model inference -->
         <dependency>
             <groupId>com.microsoft.onnxruntime</groupId>
             <artifactId>onnxruntime</artifactId>
             <version>1.18.0</version>
         </dependency>
 
+        <!-- SLF4J logging library for logging operations -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-simple</artifactId>
+            <version>2.0.0</version>
+        </dependency>
     </dependencies>
 
+    <!-- Build configuration section -->
     <build>
         <plugins>
+            <!-- Maven compiler plugin for compiling Java source code -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.8.1</version>
                 <configuration>
+                    <!-- Use Java version specified in properties -->
                     <source>${java.version}</source>
                     <target>${java.version}</target>
                     <encoding>${project.build.sourceEncoding}</encoding>
                 </configuration>
             </plugin>
+
+            <!-- Azure Functions Maven plugin for packaging and deploying functions to Azure -->
             <plugin>
                 <groupId>com.microsoft.azure</groupId>
                 <artifactId>azure-functions-maven-plugin</artifactId>
                 <version>${azure.functions.maven.plugin.version}</version>
                 <configuration>
-                    <!-- function app name -->
+                    <!-- Name of the function app in Azure -->
                     <appName>${functionAppName}</appName>
-                    <!-- function app resource group -->
+                    <!-- Resource group for the function app -->
                     <resourceGroup>java-functions-group</resourceGroup>
-                    <!-- function app region-->
-                    <!-- refers https://github.com/microsoft/azure-maven-plugins/wiki/Azure-Functions:-Configuration-Details#supported-regions for all valid values -->
+                    <!-- Azure region for deploying the function app -->
                     <region>westus</region>
-                    <!-- function app service plan name -->
+                    <!-- App Service Plan name for the function app -->
                     <appServicePlanName>java-functions-app-service-plan</appServicePlanName>
-                    <!-- function pricingTier, default to be consumption if not specified -->
-                    <!-- refers https://github.com/microsoft/azure-maven-plugins/wiki/Azure-Functions:-Configuration-Details#supported-pricing-tiers for all valid values -->
-                    <!-- <pricingTier></pricingTier> -->
-                    <!-- Whether to disable application insights, default is false -->
-                    <!-- refers https://github.com/microsoft/azure-maven-plugins/wiki/Azure-Functions:-Configuration-Details for all valid configurations for application insights-->
-                    <!-- <disableAppInsights></disableAppInsights> -->
+                    <!-- OS and Java runtime version for the function app -->
                     <runtime>
-                        <!-- runtime os, could be windows, linux or docker-->
                         <os>windows</os>
                         <javaVersion>17</javaVersion>
                     </runtime>
+                    <!-- Application settings for the function app -->
                     <appSettings>
                         <property>
                             <name>FUNCTIONS_EXTENSION_VERSION</name>
@@ -112,6 +151,7 @@
                 </configuration>
                 <executions>
                     <execution>
+                        <!-- Execution goal for packaging the function app -->
                         <id>package-functions</id>
                         <goals>
                             <goal>package</goal>
@@ -119,7 +159,8 @@
                     </execution>
                 </executions>
             </plugin>
-            <!--Remove obj folder generated by .NET SDK in maven clean-->
+
+            <!-- Maven clean plugin to remove the .NET SDK's "obj" folder on clean builds -->
             <plugin>
                 <artifactId>maven-clean-plugin</artifactId>
                 <version>3.1.0</version>
